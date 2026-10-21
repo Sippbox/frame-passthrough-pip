@@ -5,6 +5,8 @@
 A small view of the Steam Frame's passthrough cameras that floats over any game, streamed or standalone. Pin it to a
 corner of your view, or place it in the room and move it around with your controllers.
 
+Developed heavily with the assistance of Claude Code.
+
 ## In action
 
 **Place it in your view** from the SteamVR dashboard:
