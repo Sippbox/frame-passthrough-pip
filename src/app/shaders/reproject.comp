@@ -1,0 +1,67 @@
+#version 450
+// Renders a rectilinear, head-forward view from the forward fisheye cameras (Kannala-Brandt model, factory
+// calibration). Each output pixel is a ray in OpenVR head space. The primary camera (0) supplies the image; the
+// secondary (1) only fills in where the primary can't see, fading in over the primary's last few degrees. Blending
+// the two everywhere would show a seam: they sit centimetres apart (parallax) and expose independently.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+struct Cam {
+  vec4 axisX, axisY, axisZ;  // camera axes in head space (xyz)
+  vec4 focal;                // fx, fy, cx, cy (pixels)
+  vec4 k;                    // k1..k4
+  vec4 size;                 // width, height, max theta (rad), 1 if present
+};
+
+layout(set = 0, binding = 0) uniform sampler2D camTex[2];
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
+layout(set = 0, binding = 2, std140) uniform Params {
+  Cam cam[2];
+  vec4 view;   // tan(half fov x), tan(half fov y), cross-fade width (rad), gain
+  vec4 frame;  // highlight 0..1, border width (pixels)
+} P;
+
+bool project(int i, vec3 d, out vec2 uv, out float theta) {
+  Cam c = P.cam[i];
+  uv = vec2(0.0);
+  theta = 10.0;
+  if (c.size.w < 0.5) return false;
+  vec3 p = vec3(dot(c.axisX.xyz, d), dot(c.axisY.xyz, d), dot(c.axisZ.xyz, d));
+  float r = length(p.xy);
+  theta = atan(r, p.z);
+  if (theta > c.size.z) return false;
+  float t2 = theta * theta;
+  float rd = theta * (1.0 + t2 * (c.k.x + t2 * (c.k.y + t2 * (c.k.z + t2 * c.k.w))));
+  vec2 xy = r > 1e-7 ? p.xy * (rd / r) : vec2(0.0);
+  vec2 px = vec2(c.focal.x * xy.x + c.focal.z, c.focal.y * xy.y + c.focal.w);
+  uv = (px + 0.5) / c.size.xy;
+  return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
+}
+
+void main() {
+  ivec2 sz = imageSize(outImage);
+  ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+  if (g.x >= sz.x || g.y >= sz.y) return;
+  vec2 ndc = (vec2(g) + 0.5) / vec2(sz) * 2.0 - 1.0;  // row 0 is the top of the image
+  vec3 d = normalize(vec3(ndc.x * P.view.x, -ndc.y * P.view.y, -1.0));
+
+  vec2 uv0, uv1;
+  float th0, th1;
+  bool ok0 = project(0, d, uv0, th0);
+  bool ok1 = project(1, d, uv1, th1);
+  float v = 0.0;
+  if (ok0) {
+    float v0 = textureLod(camTex[0], uv0, 0.0).r;
+    float edge = min(min(uv0.x, 1.0 - uv0.x), min(uv0.y, 1.0 - uv0.y));
+    float w0 = ok1 ? min(clamp((P.cam[0].size.z - th0) / P.view.z, 0.0, 1.0), clamp(edge / 0.03, 0.0, 1.0)) : 1.0;
+    v = w0 < 1.0 ? mix(textureLod(camTex[1], uv1, 0.0).r, v0, w0) : v0;
+  } else if (ok1) {
+    v = textureLod(camTex[1], uv1, 0.0).r;
+  }
+  vec3 color = vec3(clamp(v * P.view.w, 0.0, 1.0));
+  if (P.frame.x > 0.0) {  // a softly edged frame in Steam Frame blue shows a controller is aiming at the PiP
+    float inset = float(min(min(g.x, sz.x - 1 - g.x), min(g.y, sz.y - 1 - g.y)));
+    float border = 1.0 - smoothstep(P.frame.y - 2.0, P.frame.y, inset);
+    color = mix(color, vec3(0.102, 0.624, 1.0), border * P.frame.x);  // #1A9FFF
+  }
+  imageStore(outImage, g, vec4(color, 1.0));
+}

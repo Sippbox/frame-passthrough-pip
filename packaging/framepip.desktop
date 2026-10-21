@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Passthrough PiP Installer
+Comment=Install or uninstall Passthrough PiP for Steam Frame
+Exec=AppRun
+Icon=framepip
+Terminal=false
+Categories=Utility;

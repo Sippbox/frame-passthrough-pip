@@ -1,0 +1,41 @@
+{
+  "action_manifest_version": 0,
+  "alias_info": {},
+  "app_key": "system.generated.framepip",
+  "bindings": {
+    "/actions/pip": {
+      "sources": [
+        {
+          "path": "/user/hand/left/input/grip",
+          "mode": "button",
+          "inputs": { "click": { "output": "/actions/pip/in/grab" } }
+        },
+        {
+          "path": "/user/hand/right/input/grip",
+          "mode": "button",
+          "inputs": { "click": { "output": "/actions/pip/in/grab" } }
+        },
+        {
+          "path": "/user/hand/left/input/view",
+          "mode": "button",
+          "parameters": {},
+          "inputs": { "double": { "output": "/actions/pip/in/toggle" } }
+        }
+      ],
+      "poses": [
+        { "output": "/actions/pip/in/aim", "path": "/user/hand/left/pose/tip" },
+        { "output": "/actions/pip/in/aim", "path": "/user/hand/right/pose/tip" }
+      ],
+      "haptics": [
+        { "output": "/actions/pip/out/haptic", "path": "/user/hand/left/output/haptic" },
+        { "output": "/actions/pip/out/haptic", "path": "/user/hand/right/output/haptic" }
+      ]
+    }
+  },
+  "category": "steamvr_input",
+  "controller_type": "frame_controller",
+  "description": "Double-tap View on the left controller to show or hide the camera view. Hold grip while pointing at (or touching) it to move it; grip with the other hand too to resize.",
+  "name": "Passthrough PiP defaults",
+  "options": {},
+  "simulated_actions": []
+}

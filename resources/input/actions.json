@@ -1,0 +1,24 @@
+{
+  "default_bindings": [
+    { "controller_type": "frame_controller", "binding_url": "bindings_frame_controller.json" }
+  ],
+  "actions": [
+    { "name": "/actions/pip/in/toggle", "type": "boolean", "requirement": "suggested" },
+    { "name": "/actions/pip/in/grab", "type": "boolean", "requirement": "suggested" },
+    { "name": "/actions/pip/in/aim", "type": "pose" },
+    { "name": "/actions/pip/out/haptic", "type": "vibration" }
+  ],
+  "action_sets": [
+    { "name": "/actions/pip", "usage": "leftright" }
+  ],
+  "localization": [
+    {
+      "language_tag": "en_US",
+      "/actions/pip": "Passthrough PiP",
+      "/actions/pip/in/toggle": "Show / hide the PiP",
+      "/actions/pip/in/grab": "Grab the camera view",
+      "/actions/pip/in/aim": "Pointing pose",
+      "/actions/pip/out/haptic": "Grab feedback"
+    }
+  ]
+}

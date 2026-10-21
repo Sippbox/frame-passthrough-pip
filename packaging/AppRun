@@ -1,0 +1,196 @@
+#!/bin/bash
+# Passthrough PiP AppImage entry point: asks whether to install, update or uninstall, then does it for the current
+# user. Nothing outside $HOME is touched and no root is needed.
+set -u
+
+HERE="$(dirname "$(readlink -f "$0")")"
+PAYLOAD="$HERE/usr/lib/framepip"
+VERSION="$(cat "$PAYLOAD/share/VERSION" 2>/dev/null || echo "?")"
+TITLE="Passthrough PiP $VERSION"
+
+DEST="$HOME/.local/share/framepip"
+CONFIG="$HOME/.config/framepip"
+UNIT_NAME="framepip.service"
+UNIT="$HOME/.config/systemd/user/$UNIT_NAME"
+DESKTOP="$HOME/.local/share/applications/framepip.desktop"
+VRPATHREG=/opt/steamvr/bin/linuxarm64/vrpathreg
+
+# systemd's user manager lives in /run/user/<uid>; Desktop Mode's nested session points XDG_RUNTIME_DIR elsewhere.
+# Only systemctl gets the override, so the dialogs keep talking to the desktop they run on.
+user_systemctl() {
+  XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+    systemctl --user "$@"
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+gui() { [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; }
+ASSUME_YES=0
+
+say() {  # say info|error TEXT
+  local msg
+  msg="$(printf '%b' "$2")"
+  if gui && have kdialog; then
+    if [ "$1" = error ]; then kdialog --title "$TITLE" --error "$msg"; else kdialog --title "$TITLE" --msgbox "$msg"; fi
+  elif gui && have zenity; then
+    zenity --"$1" --title="$TITLE" --text="$msg" --no-wrap
+  else
+    echo "$msg" >&2
+  fi
+}
+
+ask_yes_no() {  # ask_yes_no TEXT YES_LABEL NO_LABEL -> 0 yes, 1 no
+  local msg a
+  msg="$(printf '%b' "$1")"
+  if [ "$ASSUME_YES" = 1 ]; then
+    return 0
+  elif gui && have kdialog; then
+    kdialog --title "$TITLE" --yes-label "$2" --no-label "$3" --yesno "$msg"
+  elif gui && have zenity; then
+    zenity --question --title="$TITLE" --text="$msg" --ok-label="$2" --cancel-label="$3" --no-wrap
+  elif [ -t 0 ]; then
+    read -r -p "$msg [$2/$3] " a
+    [ "${a,,}" = "${2,,}" ] || [ "${a,,}" = y ] || [ "${a,,}" = yes ]
+  else
+    return 1
+  fi
+}
+
+ask_installed_action() {  # prints update|uninstall|cancel
+  local msg r rc a
+  msg="$(printf '%b' "Passthrough PiP $(cat "$DEST/share/VERSION" 2>/dev/null) is installed.\n\nUpdate it to $VERSION, or uninstall it?")"
+  if gui && have kdialog; then
+    kdialog --title "$TITLE" --yes-label "Update" --no-label "Uninstall" --cancel-label "Cancel" --yesnocancel "$msg"
+    case $? in 0) echo update ;; 1) echo uninstall ;; *) echo cancel ;; esac
+  elif gui && have zenity; then
+    r=$(zenity --question --title="$TITLE" --text="$msg" --ok-label="Update" --cancel-label="Cancel" \
+      --extra-button="Uninstall" --no-wrap)
+    rc=$?
+    if [ "$r" = "Uninstall" ]; then echo uninstall; elif [ $rc -eq 0 ]; then echo update; else echo cancel; fi
+  elif [ -t 0 ]; then
+    echo "$msg" >&2
+    read -r -p "[u]pdate, [r]emove, or [c]ancel? " a
+    case "${a,,}" in u*) echo update ;; r*) echo uninstall ;; *) echo cancel ;; esac
+  else
+    echo cancel
+  fi
+}
+
+# vrpathreg tells SteamVR's vrmonitor about a new driver by running `xdg-open vrmonitor://driverinstalled`. On the
+# Frame's desktop nothing handles that URL, so KDE pops up "Could not read file". The installer restarts SteamVR
+# itself, so the notification is replaced by a silent xdg-open for vrpathreg's run only.
+vrpathreg() {
+  local stub rc
+  stub="$(mktemp -d)" || return 1
+  printf '#!/bin/sh\nexit 0\n' > "$stub/xdg-open"
+  chmod 755 "$stub/xdg-open"
+  PATH="$stub:$PATH" "$VRPATHREG" "$@" >/dev/null 2>&1
+  rc=$?
+  rm -rf "$stub"
+  return $rc
+}
+
+restart_steamvr() {  # restart_steamvr REASON
+  user_systemctl is-active --quiet steamvr.service || return 0
+  if ask_yes_no "$1\n\nRestart SteamVR now? This reloads the whole headset session, much like a quick reboot, so save anything open first." "Restart now" "Later"; then
+    user_systemctl restart steamvr.service
+  fi
+}
+
+install_app() {
+  if [ "$(uname -m)" != aarch64 ] || [ ! -x "$VRPATHREG" ]; then
+    say error "This installer is for the Steam Frame: it needs SteamOS on aarch64 with SteamVR in /opt/steamvr."
+    exit 1
+  fi
+  # an update keeps "Start with SteamVR" off if the user turned it off
+  local autostart=1
+  [ -f "$UNIT" ] && [ "$(user_systemctl is-enabled "$UNIT_NAME" 2>/dev/null)" = disabled ] && autostart=0
+  user_systemctl stop "$UNIT_NAME" 2>/dev/null
+
+  # new files next to the old ones, then swapped in: SteamVR may have the old driver loaded
+  rm -rf "$DEST.new" "$DEST.old"
+  mkdir -p "$(dirname "$DEST")"
+  if ! cp -a "$PAYLOAD/." "$DEST.new"; then
+    say error "Couldn't copy the program files to $DEST."
+    exit 1
+  fi
+  [ -d "$DEST" ] && mv "$DEST" "$DEST.old"
+  mv "$DEST.new" "$DEST"
+  rm -rf "$DEST.old"
+
+  mkdir -p "$(dirname "$UNIT")" "$(dirname "$DESKTOP")"
+  cat > "$UNIT" <<EOF
+[Unit]
+Description=Passthrough PiP (picture-in-picture camera view for Steam Frame)
+After=steamvr.service
+PartOf=steamvr.service
+
+[Service]
+ExecStart=%h/.local/share/framepip/bin/framepip
+# Back after SteamVR restarts inside a running steamvr.service. Exit status 3 means the user closed the app (or
+# another copy was running): leave it closed. PartOf stops it together with SteamVR.
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=3
+SuccessExitStatus=3
+
+[Install]
+WantedBy=steamvr.service
+EOF
+  cat > "$DESKTOP" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Passthrough PiP
+Comment=Picture-in-picture view of the headset cameras
+Exec=$DEST/bin/framepip --open
+Icon=$DEST/share/icon.png
+Terminal=false
+Categories=Utility;
+EOF
+  have update-desktop-database && update-desktop-database "$(dirname "$DESKTOP")" 2>/dev/null
+
+  if ! vrpathreg adddriver "$DEST/driver/framepip"; then
+    say error "Couldn't register the camera driver with SteamVR (vrpathreg adddriver failed)."
+    exit 1
+  fi
+  user_systemctl daemon-reload
+  if [ $autostart = 1 ]; then user_systemctl enable "$UNIT_NAME" >/dev/null 2>&1; fi
+
+  restart_steamvr "Passthrough PiP $VERSION is installed. SteamVR has to restart once to load its camera driver."
+  user_systemctl is-active --quiet steamvr.service && user_systemctl start "$UNIT_NAME"
+  say info "Passthrough PiP $VERSION is installed.\n\nOpen its settings from the SteamVR dashboard, or from Launch Program > Passthrough PiP. Its Settings page decides whether it starts with SteamVR."
+}
+
+uninstall_app() {
+  user_systemctl disable --now "$UNIT_NAME" >/dev/null 2>&1
+  rm -f "$UNIT"
+  user_systemctl daemon-reload
+  [ -x "$VRPATHREG" ] && vrpathreg removedriver "$DEST/driver/framepip"
+  rm -f "$DESKTOP"
+  have update-desktop-database && update-desktop-database "$(dirname "$DESKTOP")" 2>/dev/null
+  rm -rf "$DEST" "$CONFIG" "/run/user/$(id -u)/framepip"
+  restart_steamvr "Passthrough PiP is uninstalled. Its camera driver stays loaded until SteamVR restarts."
+  say info "Passthrough PiP is uninstalled."
+}
+
+ACTION=""
+for arg in "$@"; do
+  case "$arg" in
+    --install | --uninstall) ACTION="$arg" ;;
+    --yes) ASSUME_YES=1 ;;  # answer every question with yes (restart SteamVR included)
+    *) echo "usage: $(basename "${APPIMAGE:-$0}") [--install | --uninstall] [--yes]" >&2; exit 2 ;;
+  esac
+done
+case "$ACTION" in
+  --install) install_app; exit 0 ;;
+  --uninstall) uninstall_app; exit 0 ;;
+esac
+
+if [ -x "$DEST/bin/framepip" ]; then
+  case "$(ask_installed_action)" in
+    update) install_app ;;
+    uninstall) ask_yes_no "Uninstall Passthrough PiP and remove its settings?" "Uninstall" "Cancel" && uninstall_app ;;
+  esac
+else
+  ask_yes_no "Install Passthrough PiP $VERSION?\n\nIt shows a small view of the headset cameras over your games, pinned to your view or placed in the room, with a settings panel in the SteamVR dashboard." "Install" "Cancel" && install_app
+fi
+exit 0
