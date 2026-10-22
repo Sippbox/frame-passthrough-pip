@@ -91,11 +91,14 @@ int AcquireInstanceLock() {
   return fd;
 }
 
-bool InitVr(vr::EVRApplicationType type, double timeout) {
+// Connects to an already running SteamVR, as a background app: unlike an overlay app, a background app never starts
+// SteamVR itself. A vrserver started that way, outside the Frame's gamescope session, keeps the session from starting
+// (black screen). Background apps get the full IVROverlay (overlays, dashboard overlay, input).
+bool InitVr(double timeout) {
   const double until = Now() + timeout;
   while (!g_stop) {
     vr::EVRInitError e = vr::VRInitError_None;
-    vr::VR_Init(&e, type);
+    vr::VR_Init(&e, vr::VRApplication_Background);
     if (e == vr::VRInitError_None) return true;
     if (Now() > until) {
       fprintf(stderr, "VR_Init: %s\n", vr::VR_GetVRInitErrorAsEnglishDescription(e));
@@ -198,7 +201,7 @@ int RunOverlay() {
     fprintf(stderr, "framepip is already running\n");
     return kExitClosed;
   }
-  if (!InitVr(vr::VRApplication_Overlay, 120)) return 1;
+  if (!InitVr(120)) return 1;
   vr::IVROverlay *ov = vr::VROverlay();
 
   // camera pipeline
@@ -460,8 +463,8 @@ int OpenDashboard() {
     close(lock);
     StartOverlay();
   }
-  // Utility apps get no IVROverlay; an overlay-type connection that creates no overlays can still find and show ours.
-  if (!InitVr(vr::VRApplication_Overlay, 15)) return 1;
+  // a connection that creates no overlays can still find and show ours
+  if (!InitVr(15)) return 1;
   vr::IVROverlay *ov = vr::VROverlay();
   int rc = 1;
   for (const double until = Now() + 20; ov && Now() < until && !g_stop; Sleep(0.25)) {

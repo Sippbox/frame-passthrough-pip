@@ -122,6 +122,8 @@ install_app() {
 [Unit]
 Description=Passthrough PiP (picture-in-picture camera view for Steam Frame)
 After=steamvr.service
+# Only alongside a running SteamVR: if its start fails (e.g. the gamescope session crashed), stay out of the way.
+Requisite=steamvr.service
 PartOf=steamvr.service
 
 [Service]

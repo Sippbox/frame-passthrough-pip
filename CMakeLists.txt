@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(framepip VERSION 0.9.0 LANGUAGES C CXX)
+project(framepip VERSION 0.9.1 LANGUAGES C CXX)
 
 # Builds on the Steam Frame itself (SteamOS, aarch64): SteamVR ships libopenvr_api.so there.
 set(CMAKE_CXX_STANDARD 17)
